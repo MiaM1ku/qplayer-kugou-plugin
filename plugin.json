@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "kugou",
+  "name": "酷狗音乐",
+  "version": "0.1.0",
+  "apiVersion": "1.0",
+  "minHostVersion": "1.4.0",
+  "entry": "src/main.js",
+  "publisher": "MiaM1ku",
+  "capabilities": [
+    "searchSongs",
+    "searchAlbums",
+    "songDetails",
+    "playlistDetails",
+    "albumDetails",
+    "artistDetails",
+    "home",
+    "userPlaylists",
+    "resolveStream",
+    "lyrics",
+    "account",
+    "login"
+  ],
+  "permissions": [
+    "network",
+    "clearTextNetwork",
+    "credentials"
+  ],
+  "networkDomains": [
+    "songsearch.kugou.com",
+    "mobilecdn.kugou.com",
+    "m.kugou.com",
+    "www.kugou.com",
+    "wwwapi.kugou.com",
+    "trackercdn.kugou.com",
+    "trackercdnbj.kugou.com",
+    "gateway.kugou.com",
+    "tracker.kugou.com",
+    "krcs.kugou.com",
+    "lyrics.kugou.com",
+    "login-user.kugou.com",
+    "h5.kugou.com",
+    "vip.kugou.com",
+    "userservice.kugou.com",
+    "imge.kugou.com",
+    "imgessl.kugou.com",
+    "singerimg.kugou.com",
+    "*.kugou.com",
+    "*.kgimg.com",
+    "*.kugou.net",
+    "*.bsccdn.net",
+    "*.bsccdn.com"
+  ],
+  "networkMethods": [
+    "GET",
+    "POST",
+    "HEAD"
+  ],
+  "ui": []
+}
