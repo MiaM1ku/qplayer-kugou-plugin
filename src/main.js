@@ -11,6 +11,7 @@ var LITE_VER = "11440";
 var REF_MOBILE = "http://m.kugou.com";
 var RSA_N = "c40a2d0da76511f3bb1cc2bbd3afbd8bea83b4d6b05b6c13eb8920c53f1af7679b32ba0d0edb843240ef1b836efed3ee240734c14c1399fd6594d16af22f52525d14d72e0155c6dcc8638d4f7bb94f3a0b1f4c29f991972f2a160a25eb0a9e724336be7f69bbd319ffab1c6dd8470b021dc434f3faba89f4a2a01b33bdbdd08b";
 var RSA_E = "010001";
+var krc = require("./krc.js");
 
 function call(method, args) { return qplayer.call(method, args || {}); }
 
@@ -515,14 +516,9 @@ function lyrics(args) {
       var candidate = (body.candidates || [])[0];
       if (!candidate) return { assets: [] };
       var url = "http://lyrics.kugou.com/download?ver=1&client=pc&id=" + encodeURIComponent(candidate.id)
-        + "&accesskey=" + encodeURIComponent(candidate.accesskey) + "&fmt=lrc&charset=utf8";
+        + "&accesskey=" + encodeURIComponent(candidate.accesskey) + "&fmt=krc&charset=utf8";
       return httpGetJson(url, UA_MOBILE).then(function (dl) {
-        var content = String(dl.content || "");
-        if (!content) return { assets: [] };
-        if (content.indexOf("[") >= 0) {
-          return { assets: [{ format: "lrc", role: "original", text: content }] };
-        }
-        return { assets: [] };
+        return { assets: krc.assetsFromDownload(dl) };
       });
     }, function () { return { assets: [] }; });
 }
