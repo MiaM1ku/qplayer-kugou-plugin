@@ -17,7 +17,7 @@ QPlayer 的独立音源插件，实现公开的 JavaScript 插件 ABI（apiVersi
 | `home` | 手机端热门歌单 |
 | `userPlaylists` | 登录后的用户歌单 |
 | `resolveStream` | songinfo v2 → playInfo → tracker |
-| `lyrics` | 明文 LRC |
+| `lyrics` | KRC 解密后的 LRC，含翻译/罗马音（若有） |
 | `login` / `account` | 扫码（含设备注册）或粘贴 Cookie |
 
 歌曲原生 ID 为 32 位音频 hash。VIP 音质需要有效登录 Cookie。
