@@ -1,7 +1,7 @@
 "use strict";
 
 // 酷狗 KRC：base64 → 去掉 krc1 → 16 字节循环 XOR → zlib。
-// 翻译和罗马音在解密文本的 [language:] 标签里，不需要第二次请求。
+// 翻译和罗马音在解密文本的 [language:] 里，按下标对齐每一行计时歌词，空行也占位。
 
 var KRC_KEY = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
 
@@ -84,6 +84,7 @@ function inflateZlib(bytes) {
   var distBase = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
   var distExtra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
   var out = [];
+  var maxOut = 1024 * 1024;
   var final = 0;
   while (!final) {
     final = take(1);
@@ -95,6 +96,7 @@ function inflateZlib(bytes) {
       var len = bytes[pos] | (bytes[pos + 1] << 8);
       pos += 4;
       if (pos + len > bytes.length) throw new Error("stored 数据截断");
+      if (out.length + len > maxOut) throw new Error("deflate 过大");
       for (var s = 0; s < len; s++) out.push(bytes[pos++]);
       continue;
     }
@@ -123,6 +125,7 @@ function inflateZlib(bytes) {
           lengths.push(sym);
         } else if (sym === 16) {
           var rep = take(2) + 3;
+          if (!lengths.length) throw new Error("deflate 码表错误");
           var prev = lengths[lengths.length - 1];
           for (var r = 0; r < rep; r++) lengths.push(prev);
         } else if (sym === 17) {
@@ -141,6 +144,7 @@ function inflateZlib(bytes) {
     while (true) {
       var code = decodeSymbol(litTree);
       if (code < 256) {
+        if (out.length >= maxOut) throw new Error("deflate 过大");
         out.push(code);
       } else if (code === 256) {
         break;
@@ -148,6 +152,8 @@ function inflateZlib(bytes) {
         var length = lenBase[code - 257] + take(lenExtra[code - 257]);
         var distCode = decodeSymbol(distTree);
         var distance = distBase[distCode] + take(distExtra[distCode]);
+        if (!(distance > 0) || distance > out.length) throw new Error("deflate 距离错误");
+        if (out.length + length > maxOut) throw new Error("deflate 过大");
         for (var n = 0; n < length; n++) out.push(out[out.length - distance]);
       }
     }
@@ -214,49 +220,53 @@ function parseLanguage(text) {
   var jsonText = bytesToUtf8(b64ToBytes(match[1]));
   var parsed;
   try { parsed = JSON.parse(jsonText); } catch (_) { return { translation: [], romanization: [] }; }
-  var translation = [];
-  var romanization = [];
+  var translation = null;
+  var romanization = null;
   ((parsed && parsed.content) || []).forEach(function (block) {
     var rows = block.lyricContent || [];
-    if (Number(block.type) === 1) {
-      rows.forEach(function (row) { translation.push(row && row[0] ? String(row[0]) : ""); });
-    } else if (Number(block.type) === 0) {
-      rows.forEach(function (row) {
-        romanization.push((row || []).join(""));
-      });
+    if (Number(block.type) === 1 && !translation) {
+      translation = rows.map(function (row) { return row && row[0] ? String(row[0]) : ""; });
+    } else if (Number(block.type) === 0 && !romanization) {
+      romanization = rows.map(function (row) { return (row || []).join(""); });
     }
   });
-  return { translation: translation, romanization: romanization };
+  return { translation: translation || [], romanization: romanization || [] };
 }
 
-function krcToLrc(text) {
+function lyricText(value) {
+  var text = String(value || "").trim();
+  if (!text || text === "//") return "";
+  return text;
+}
+
+function krcToLrc(text, adjustMs) {
+  var offset = Number(adjustMs) || 0;
+  var offsetMatch = String(text || "").match(/\[offset:\s*([+-]?\d+)\s*\]/);
+  if (offsetMatch) offset += Number(offsetMatch[1]) || 0;
   var lines = String(text || "").split(/\r?\n/);
   var timed = [];
   lines.forEach(function (line) {
     var match = line.match(/^\[(\d+),(\d+)\](.*)$/);
     if (!match) return;
-    var words = match[3].replace(/<\d+,\d+,\d+>/g, "");
-    if (!words.trim()) return;
-    timed.push({ start: Number(match[1]), text: words });
+    timed.push({
+      start: Number(match[1]) + offset,
+      text: match[3].replace(/<\d+,\d+,\d+>/g, "")
+    });
   });
   var language = parseLanguage(text);
-  var original = timed.map(function (row) { return lrcTime(row.start) + row.text; }).join("\n");
+  var original = [];
   var translation = [];
   var romanization = [];
-  var tIndex = 0;
-  var rIndex = 0;
-  timed.forEach(function (row) {
-    if (tIndex < language.translation.length) {
-      var translated = language.translation[tIndex++] || "";
-      if (translated) translation.push(lrcTime(row.start) + translated);
-    }
-    if (rIndex < language.romanization.length) {
-      var roman = language.romanization[rIndex++] || "";
-      if (roman) romanization.push(lrcTime(row.start) + roman);
-    }
+  timed.forEach(function (row, index) {
+    var stamp = lrcTime(row.start);
+    if (row.text.trim()) original.push(stamp + row.text);
+    var translated = lyricText(language.translation[index]);
+    if (translated) translation.push(stamp + translated);
+    var roman = lyricText(language.romanization[index]);
+    if (roman) romanization.push(stamp + roman);
   });
   return {
-    original: original,
+    original: original.join("\n"),
     translation: translation.join("\n"),
     romanization: romanization.join("\n")
   };
@@ -273,22 +283,26 @@ function decodeContent(content, fmt, contentType) {
   return bytesToUtf8(inflateZlib(xorKrc(bytes)));
 }
 
-function assetsFromDownload(download) {
-  var body = download || {};
-  var content = String(body.content || "");
-  if (!content) return [];
-  var text = decodeContent(content, body.fmt, body.contenttype);
-  if (!text) return [];
-  if (/\[\d+,\d+\]/.test(text)) {
-    var parsed = krcToLrc(text);
-    var assets = [];
-    if (parsed.original) assets.push({ format: "lrc", role: "original", text: parsed.original });
-    if (parsed.translation) assets.push({ format: "lrc", role: "translation", text: parsed.translation });
-    if (parsed.romanization) assets.push({ format: "lrc", role: "romanization", text: parsed.romanization });
-    return assets;
+function assetsFromDownload(download, adjustMs) {
+  try {
+    var body = download || {};
+    var content = String(body.content || "");
+    if (!content) return [];
+    var text = decodeContent(content, body.fmt, body.contenttype);
+    if (!text) return [];
+    if (/\[\d+,\d+\]/.test(text)) {
+      var parsed = krcToLrc(text, adjustMs);
+      var assets = [];
+      if (parsed.original) assets.push({ format: "lrc", role: "original", text: parsed.original });
+      if (parsed.translation) assets.push({ format: "lrc", role: "translation", text: parsed.translation });
+      if (parsed.romanization) assets.push({ format: "lrc", role: "romanization", text: parsed.romanization });
+      return assets;
+    }
+    if (text.indexOf("[") >= 0) return [{ format: "lrc", role: "original", text: text }];
+    return [];
+  } catch (_) {
+    return [];
   }
-  if (text.indexOf("[") >= 0) return [{ format: "lrc", role: "original", text: text }];
-  return [];
 }
 
 module.exports = {

@@ -518,8 +518,8 @@ function lyrics(args) {
       var url = "http://lyrics.kugou.com/download?ver=1&client=pc&id=" + encodeURIComponent(candidate.id)
         + "&accesskey=" + encodeURIComponent(candidate.accesskey) + "&fmt=krc&charset=utf8";
       return httpGetJson(url, UA_MOBILE).then(function (dl) {
-        return { assets: krc.assetsFromDownload(dl) };
-      });
+        return { assets: krc.assetsFromDownload(dl, candidate.adjust) };
+      }, function () { return { assets: [] }; });
     }, function () { return { assets: [] }; });
 }
 
