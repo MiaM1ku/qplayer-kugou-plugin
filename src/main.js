@@ -508,18 +508,34 @@ function artistDetails(args) {
   });
 }
 
+function lyricDownloadUrls(candidate) {
+  var query = "ver=1&id=" + encodeURIComponent(candidate.id)
+    + "&accesskey=" + encodeURIComponent(candidate.accesskey) + "&fmt=krc&charset=utf8";
+  // 播放器的 HTTP 客户端连 http://lyrics.kugou.com 会被对端直接掐断（Connection reset），
+  // 不是权限拒绝。搜索走 krcs，下载也走同一台，再备一条 HTTPS。
+  return [
+    "https://krcs.kugou.com/download?" + query + "&client=pc",
+    "https://lyrics.kugou.com/download?" + query + "&client=mobi"
+  ];
+}
+
+function downloadLyric(candidate, index) {
+  var urls = lyricDownloadUrls(candidate);
+  if (index >= urls.length) return { assets: [] };
+  return httpGetJson(urls[index], UA_MOBILE).then(function (dl) {
+    var assets = krc.assetsFromDownload(dl, candidate.adjust);
+    return assets.length ? { assets: assets } : downloadLyric(candidate, index + 1);
+  }, function () { return downloadLyric(candidate, index + 1); });
+}
+
 function lyrics(args) {
   var hash = String(args && args.id || "").toLowerCase();
   if (!validHash(hash)) return { assets: [] };
   return httpGetJson("http://krcs.kugou.com/search?ver=1&client=mobi&duration=0&hash=" + hash + "&album_audio_id=", UA_MOBILE)
     .then(function (body) {
       var candidate = (body.candidates || [])[0];
-      if (!candidate) return { assets: [] };
-      var url = "http://lyrics.kugou.com/download?ver=1&client=pc&id=" + encodeURIComponent(candidate.id)
-        + "&accesskey=" + encodeURIComponent(candidate.accesskey) + "&fmt=krc&charset=utf8";
-      return httpGetJson(url, UA_MOBILE).then(function (dl) {
-        return { assets: krc.assetsFromDownload(dl, candidate.adjust) };
-      }, function () { return { assets: [] }; });
+      if (!candidate || !candidate.id || !candidate.accesskey) return { assets: [] };
+      return downloadLyric(candidate, 0);
     }, function () { return { assets: [] }; });
 }
 

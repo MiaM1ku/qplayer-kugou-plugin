@@ -1,7 +1,8 @@
 "use strict";
 
 // 酷狗 KRC：base64 → 去掉 krc1 → 16 字节循环 XOR → zlib。
-// 翻译和罗马音在解密文本的 [language:] 里，按下标对齐每一行计时歌词，空行也占位。
+// 字时间 <偏移,时长,0> 换成宿主能逐字渲染的增强 LRC；翻译和罗马音仍是行级 LRC，
+// 按下标对齐每一行计时歌词，空行也占位。
 
 var KRC_KEY = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
 
@@ -204,14 +205,100 @@ function pad(n) {
   return n < 10 ? "0" + n : String(n);
 }
 
-function lrcTime(ms) {
-  if (ms < 0) ms = 0;
-  var total = Math.floor(ms / 10);
-  var cs = total % 100;
-  var sec = Math.floor(total / 100);
-  var s = sec % 60;
-  var m = Math.floor(sec / 60);
-  return "[" + pad(m) + ":" + pad(s) + "." + pad(cs) + "]";
+function pad3(n) {
+  if (n < 10) return "00" + n;
+  if (n < 100) return "0" + n;
+  return String(n);
+}
+
+function clampMs(ms) {
+  ms = Math.floor(Number(ms) || 0);
+  return ms < 0 ? 0 : ms;
+}
+
+function clock(ms) {
+  ms = clampMs(ms);
+  var milli = ms % 1000;
+  var sec = Math.floor(ms / 1000);
+  return pad(Math.floor(sec / 60)) + ":" + pad(sec % 60) + "." + pad3(milli);
+}
+
+function lrcStamp(ms) {
+  return "[" + clock(ms) + "]";
+}
+
+function wordStamp(ms) {
+  return "<" + clock(ms) + ">";
+}
+
+function escapeWordText(text) {
+  return String(text || "").replace(/</g, "＜");
+}
+
+function wordTags(body) {
+  var tags = [];
+  var re = /<(\d+),(\d+),(\d+)>/g;
+  var match;
+  while ((match = re.exec(body))) {
+    tags.push({
+      at: match.index,
+      end: match.index + match[0].length,
+      offset: Number(match[1]) || 0,
+      dur: Number(match[2]) || 0
+    });
+  }
+  return tags;
+}
+
+function stripped(body) {
+  return String(body || "").replace(/<\d+,\d+,\d+>/g, "");
+}
+
+// 字时间相对行首。增强 LRC 用下一个标签关掉上一个字，空隙要补结束标签，
+// 否则高亮会停在上一个字上。KRC 里 <0,0,0> 不是回到行首，零时长标签也没有独立时间，
+// 并进相邻的字，避免宿主把零时长音节拉成整行。歌词里的 "<" 换成全角。
+function lineToEnhanced(lineStart, body) {
+  body = String(body || "");
+  var tags = wordTags(body);
+  if (!tags.length) return lrcStamp(lineStart) + escapeWordText(body);
+  var raw = [];
+  for (var i = 0; i < tags.length; i++) {
+    var textEnd = i + 1 < tags.length ? tags[i + 1].at : body.length;
+    var text = body.slice(tags[i].end, textEnd);
+    if (i === 0 && tags[0].at > 0) text = body.slice(0, tags[0].at) + text;
+    raw.push({ offset: tags[i].offset, dur: tags[i].dur, text: text });
+  }
+  var words = [];
+  for (var w = 0; w < raw.length; w++) {
+    var tag = raw[w];
+    var next = w + 1 < raw.length ? raw[w + 1] : null;
+    var untimed = tag.dur <= 0;
+    if (untimed && next && next.offset === tag.offset) {
+      next.text = tag.text + next.text;
+      continue;
+    }
+    var abs = clampMs(lineStart + tag.offset);
+    if (untimed && words.length && (tag.offset === 0 || abs < words[words.length - 1].end)) {
+      words[words.length - 1].text += tag.text;
+      continue;
+    }
+    var end = abs + (tag.dur > 0 ? tag.dur : 1);
+    if (next) {
+      var nextAbs = clampMs(lineStart + next.offset);
+      if (nextAbs > abs && end > nextAbs) end = nextAbs;
+    }
+    if (end <= abs) end = abs + 1;
+    words.push({ start: abs, end: end, text: tag.text });
+  }
+  var out = lrcStamp(lineStart);
+  for (var n = 0; n < words.length; n++) {
+    var word = words[n];
+    if (!word.text) continue;
+    out += wordStamp(word.start) + escapeWordText(word.text);
+    var following = n + 1 < words.length ? words[n + 1].start : null;
+    if (following == null || following > word.end) out += wordStamp(word.end);
+  }
+  return out;
 }
 
 function parseLanguage(text) {
@@ -248,18 +335,15 @@ function krcToLrc(text, adjustMs) {
   lines.forEach(function (line) {
     var match = line.match(/^\[(\d+),(\d+)\](.*)$/);
     if (!match) return;
-    timed.push({
-      start: Number(match[1]) + offset,
-      text: match[3].replace(/<\d+,\d+,\d+>/g, "")
-    });
+    timed.push({ start: Number(match[1]) + offset, body: match[3] });
   });
   var language = parseLanguage(text);
   var original = [];
   var translation = [];
   var romanization = [];
   timed.forEach(function (row, index) {
-    var stamp = lrcTime(row.start);
-    if (row.text.trim()) original.push(stamp + row.text);
+    if (stripped(row.body).trim()) original.push(lineToEnhanced(row.start, row.body));
+    var stamp = lrcStamp(row.start);
     var translated = lyricText(language.translation[index]);
     if (translated) translation.push(stamp + translated);
     var roman = lyricText(language.romanization[index]);
