@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "kugou",
   "name": "酷狗音乐",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "apiVersion": "1.0",
-  "minHostVersion": "1.4.0",
+  "minHostVersion": "1.6.5",
   "entry": "src/main.js",
   "publisher": "MiaM1ku",
   "capabilities": [
@@ -24,7 +24,14 @@
   "permissions": [
     "network",
     "clearTextNetwork",
-    "credentials"
+    "credentials",
+    "clipboard",
+    "playbackRead",
+    "playbackControl",
+    "queueWrite",
+    "notifications",
+    "customUi",
+    "backgroundTimers"
   ],
   "networkDomains": [
     "songsearch.kugou.com",
@@ -56,5 +63,12 @@
     "POST",
     "HEAD"
   ],
-  "ui": []
+  "ui": [
+    {
+      "id": "listen-together",
+      "placement": "playerAction",
+      "label": "一起听",
+      "icon": "group"
+    }
+  ]
 }

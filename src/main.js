@@ -12,6 +12,7 @@ var REF_MOBILE = "http://m.kugou.com";
 var RSA_N = "c40a2d0da76511f3bb1cc2bbd3afbd8bea83b4d6b05b6c13eb8920c53f1af7679b32ba0d0edb843240ef1b836efed3ee240734c14c1399fd6594d16af22f52525d14d72e0155c6dcc8638d4f7bb94f3a0b1f4c29f991972f2a160a25eb0a9e724336be7f69bbd319ffab1c6dd8470b021dc434f3faba89f4a2a01b33bdbdd08b";
 var RSA_E = "010001";
 var krc = require("./krc.js");
+var gateway = require("./gateway");
 
 function call(method, args) { return qplayer.call(method, args || {}); }
 
@@ -252,6 +253,7 @@ function songDetails(args) {
 function playlistDetails(args) {
   var id = str(args && args.id);
   if (!id) throw new Error("缺少歌单 ID");
+  if (id.indexOf("cloudlist:") === 0) return cloudPlaylistDetails(id.slice("cloudlist:".length));
   var infoUrl = "http://mobilecdn.kugou.com/api/v3/special/info?specialid=" + encodeURIComponent(id) + "&version=9108";
   var songUrl = "http://mobilecdn.kugou.com/api/v3/special/song?specialid=" + encodeURIComponent(id)
     + "&page=1&pagesize=300&version=9108&area_code=1";
@@ -331,28 +333,145 @@ function home(args) {
   });
 }
 
+function stripAudioExt(value) {
+  return String(value || "").replace(/\.(mp3|flac|ogg|m4a|aac|wav)$/i, "");
+}
+
+function songFromCloud(item) {
+  var hash = String(item.hash || "").toLowerCase();
+  if (!validHash(hash)) return null;
+  var artists = [];
+  (item.singerinfo || []).forEach(function (singer) {
+    var name = cleanName(singer.name);
+    if (name) artists.push({ id: str(singer.id) || name, name: name });
+  });
+  var raw = stripAudioExt(item.name || item.filename);
+  var names = splitArtistTitle(raw, artists.map(function (artist) { return artist.name; }).join("、"), "");
+  if (!artists.length) artists = artistsOf(names.artist);
+  var album = item.albuminfo || {};
+  var cover = item.cover || (item.trans_param || {}).union_cover || "";
+  return {
+    id: hash,
+    title: names.title || raw || hash,
+    durationMs: durationMsOf(item.timelen),
+    artworkUrl: secureUrl(cover),
+    artworkThumbUrl: thumbUrl(cover),
+    artists: artists,
+    album: cleanName(album.name) ? {
+      id: str(album.id) || cleanName(album.name),
+      name: cleanName(album.name)
+    } : undefined,
+    playable: true,
+    trial: num(item.media_privilege) === 10,
+    restricted: num(item.media_pay_type) > 0 && num(item.media_privilege) >= 8
+  };
+}
+
+var CLOUD_ROUTER = { "x-router": "cloudlist.service.kugou.com" };
+
+function cloudPlaylistPage(session, page, limit) {
+  return gateway.post("/v7/get_all_list", {
+    userid: session.userid,
+    token: session.token,
+    total_ver: 979,
+    type: 2,
+    page: page,
+    pagesize: Math.min(limit, 30)
+  }, { plat: "1" }, CLOUD_ROUTER);
+}
+
 function userPlaylists(args) {
   var limit = Math.max(1, Math.min(Number(args && args.limit || 50), 100));
-  return loadCookies().then(function (cookies) {
-    var userId = first(cookies.userid, cookies.KugooID);
-    if (!userId || userId === "0") return [];
-    return httpGetJson("http://m.kugou.com/plist/index/" + encodeURIComponent(userId)
-      + "?json=true&page=1&pagesize=" + limit, UA_MOBILE).then(function (body) {
-      var playlists = [];
-      var list = ((body.plist || {}).list || {}).info || body.list || [];
-      if (Object.prototype.toString.call(list) !== "[object Array]") list = [];
-      list.forEach(function (item) {
-        var id = str(item.specialid || item.global_specialid || item.listid);
-        var name = cleanName(item.specialname || item.name);
-        if (!id || !name) return;
-        var cover = secureUrl(item.imgurl || item.pic);
-        playlists.push({
-          id: id, name: name, artworkUrl: cover, artworkThumbUrl: thumbUrl(item.imgurl || item.pic),
-          trackCount: num(item.songcount || item.count), owned: true, mutable: true
+  return gateway.auth().then(function (session) {
+    if (!session) return [];
+    function load(page, acc) {
+      return cloudPlaylistPage(session, page, limit).then(function (body) {
+        var info = ((body.data || {}).info) || [];
+        info.forEach(function (item) {
+          if (acc.length >= limit) return;
+          var listId = str(item.listid);
+          var name = cleanName(item.name || item.specialname);
+          if (!listId || listId === "0" || !name) return;
+          var cover = item.pic || item.imgurl || "";
+          var owned = str(item.list_create_userid) === session.userid || num(item.is_mine) === 1;
+          acc.push({
+            id: "cloudlist:" + listId,
+            name: name,
+            description: str(item.intro),
+            artworkUrl: secureUrl(cover),
+            artworkThumbUrl: thumbUrl(cover),
+            trackCount: num(item.count) || num(item.m_count) || num(item.songcount),
+            owner: { id: str(item.list_create_userid), name: str(item.list_create_username) },
+            owned: owned,
+            subscribed: !owned,
+            mutable: false,
+            deletable: false
+          });
         });
+        if (info.length < 30 || acc.length >= limit) return acc;
+        return load(page + 1, acc);
       });
-      return playlists;
-    }, function () { return []; });
+    }
+    return load(1, []);
+  });
+}
+
+function cloudFiles(session, listId, page, acc) {
+  return gateway.post("/v4/get_list_all_file", {
+    listid: listId,
+    userid: session.userid,
+    area_code: 1,
+    show_relate_goods: 1,
+    pagesize: 300,
+    allplatform: 1,
+    show_cover: 1,
+    type: 0,
+    token: session.token,
+    page: page
+  }, null, CLOUD_ROUTER).then(function (body) {
+    var data = body.data || {};
+    (data.info || []).forEach(function (item) {
+      var song = songFromCloud(item);
+      if (song && acc.length < 2000) acc.push(song);
+    });
+    var total = num(data.count);
+    if ((data.info || []).length && acc.length < total && acc.length < 2000 && page < 8) {
+      return cloudFiles(session, listId, page + 1, acc);
+    }
+    return { songs: acc, total: total || acc.length };
+  });
+}
+
+function cloudPlaylistDetails(listId) {
+  if (!listId) throw new Error("缺少歌单 ID");
+  return gateway.auth().then(function (session) {
+    if (!session) throw new Error("请先登录后查看云歌单");
+    return Promise.all([
+      cloudPlaylistPage(session, 1, 100).then(function (body) { return ((body.data || {}).info) || []; }, function () { return []; }),
+      cloudFiles(session, listId, 1, [])
+    ]).then(function (both) {
+      var meta = null;
+      both[0].forEach(function (item) {
+        if (str(item.listid) === listId) meta = item;
+      });
+      meta = meta || {};
+      var cover = meta.pic || meta.imgurl || (both[1].songs[0] && both[1].songs[0].artworkUrl) || "";
+      var owned = str(meta.list_create_userid) === session.userid || num(meta.is_mine) === 1;
+      return {
+        id: "cloudlist:" + listId,
+        name: first(meta.name, meta.specialname, "歌单 " + listId),
+        description: str(meta.intro),
+        artworkUrl: secureUrl(cover),
+        artworkThumbUrl: thumbUrl(cover),
+        trackCount: num(meta.count) || num(meta.m_count) || both[1].total,
+        owner: { id: str(meta.list_create_userid), name: str(meta.list_create_username) },
+        owned: owned,
+        subscribed: meta.listid != null && !owned,
+        mutable: false,
+        deletable: false,
+        songs: both[1].songs
+      };
+    });
   });
 }
 
@@ -813,6 +932,12 @@ function login(args) {
   }
 }
 
+var togetherFeature = require("./together").create({
+  request: require("./room").listenTogether,
+  songs: function (ids) { return songDetails({ ids: ids }); },
+  account: account
+});
+
 module.exports = {
   handlers: {
     searchSongs: searchSongs,
@@ -826,6 +951,8 @@ module.exports = {
     resolveStream: resolveStream,
     lyrics: lyrics,
     account: account,
-    login: login
+    login: login,
+    backgroundTick: togetherFeature.tick,
+    "ui.listen-together": togetherFeature.ui
   }
 };
