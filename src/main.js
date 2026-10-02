@@ -369,6 +369,10 @@ function songFromCloud(item) {
 
 var CLOUD_ROUTER = { "x-router": "cloudlist.service.kugou.com" };
 
+function cloudPageSize(limit) {
+  return Math.min(Math.max(1, Number(limit) || 1), 30);
+}
+
 function cloudPlaylistPage(session, page, limit) {
   return gateway.post("/v7/get_all_list", {
     userid: session.userid,
@@ -376,7 +380,7 @@ function cloudPlaylistPage(session, page, limit) {
     total_ver: 979,
     type: 2,
     page: page,
-    pagesize: Math.min(limit, 30)
+    pagesize: cloudPageSize(limit)
   }, { plat: "1" }, CLOUD_ROUTER);
 }
 
@@ -408,7 +412,7 @@ function userPlaylists(args) {
             deletable: false
           });
         });
-        if (info.length < 30 || acc.length >= limit) return acc;
+        if (info.length < cloudPageSize(limit) || acc.length >= limit) return acc;
         return load(page + 1, acc);
       });
     }
@@ -442,19 +446,27 @@ function cloudFiles(session, listId, page, acc) {
   });
 }
 
+function findCloudList(session, listId, page) {
+  return cloudPlaylistPage(session, page, 30).then(function (body) {
+    var info = ((body.data || {}).info) || [];
+    var found = null;
+    info.forEach(function (item) {
+      if (str(item.listid) === listId) found = item;
+    });
+    if (found || info.length < 30 || page >= 8) return found;
+    return findCloudList(session, listId, page + 1);
+  }, function () { return null; });
+}
+
 function cloudPlaylistDetails(listId) {
   if (!listId) throw new Error("缺少歌单 ID");
   return gateway.auth().then(function (session) {
     if (!session) throw new Error("请先登录后查看云歌单");
     return Promise.all([
-      cloudPlaylistPage(session, 1, 100).then(function (body) { return ((body.data || {}).info) || []; }, function () { return []; }),
+      findCloudList(session, listId, 1),
       cloudFiles(session, listId, 1, [])
     ]).then(function (both) {
-      var meta = null;
-      both[0].forEach(function (item) {
-        if (str(item.listid) === listId) meta = item;
-      });
-      meta = meta || {};
+      var meta = both[0] || {};
       var cover = meta.pic || meta.imgurl || (both[1].songs[0] && both[1].songs[0].artworkUrl) || "";
       var owned = str(meta.list_create_userid) === session.userid || num(meta.is_mine) === 1;
       return {

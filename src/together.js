@@ -7,7 +7,8 @@ function create(api) {
     lastSongId: "", lastQueue: "", lastPlaying: false, lastSeekRevision: 0,
     lastEndRevision: 0, remoteQueue: [], listVersion: "",
     pendingEndAt: 0, ticks: 0, lastInitAttempt: 0, lastHeartbeatAt: 0,
-    reportBlockedUntil: 0, applyingRemote: false
+    reportBlockedUntil: 0, applyingRemote: false,
+    remoteProgressMark: "", remoteProgressAt: 0
   };
 
   function call(method, args) { return qplayer.call(method, args || {}); }
@@ -102,6 +103,8 @@ function create(api) {
     state.listVersion = "";
     state.pendingEndAt = 0;
     state.applyingRemote = false;
+    state.remoteProgressMark = "";
+    state.remoteProgressAt = 0;
     return blockAutoAdvance(false);
   }
   function baseline(snapshot) {
@@ -116,21 +119,39 @@ function create(api) {
     if (current && list.indexOf(current) < 0) list = [current].concat(list).slice(0, 50);
     return list;
   }
-  function applyRemote(remote) {
+  function rememberProgress(remote) {
+    var playing = remote.playing == null ? "" : (remote.playing ? "1" : "0");
+    var mark = text(remote.currentSongId) + "|" + playing + "|"
+      + (remote.progressMs == null ? "" : String(remote.progressMs));
+    if (mark !== state.remoteProgressMark) {
+      state.remoteProgressMark = mark;
+      state.remoteProgressAt = Date.now();
+    }
+  }
+  function expectedProgress(remote) {
+    if (remote.progressMs == null) return null;
+    var base = Math.max(0, Number(remote.progressMs || 0));
+    if (!remote.playing) return base;
+    return base + Math.max(0, Date.now() - Number(state.remoteProgressAt || Date.now()));
+  }
+  function applyRemote(remote, followPlayback) {
     remote = remote || {};
     if (remote.listVersion) state.listVersion = text(remote.listVersion);
     if (remote.members && state.room) state.room.members = remote.members;
+    rememberProgress(remote);
+    if (followPlayback === false) return playback();
     var remoteIds = windowIds(remote.songIds, text(remote.currentSongId));
     if (!remoteIds.length && !remote.currentSongId) return playback();
     return playback().then(function (local) {
       var song = text(remote.currentSongId) || remoteIds[0] || text(local.currentSongId);
       var playing = remote.playing == null ? !!local.playing : !!remote.playing;
       var knownProgress = remote.progressMs != null;
-      var position = knownProgress ? Math.max(0, Number(remote.progressMs || 0)) : Number(local.positionMs || 0);
+      var position = knownProgress ? expectedProgress(remote) : Number(local.positionMs || 0);
       var queueChanged = remoteIds.length && idsSignature(remoteIds) !== idsSignature(local.queueSongIds);
       var sameSong = song && song === text(local.currentSongId);
       var drift = Math.abs(Number(local.positionMs || 0) - position);
-      if (!queueChanged && sameSong && !!local.playing === playing && (!knownProgress || drift < 3000)) {
+      var tolerance = playing ? 8000 : 1500;
+      if (!queueChanged && sameSong && !!local.playing === playing && (!knownProgress || drift < tolerance)) {
         state.remoteQueue = remoteIds.length ? remoteIds.slice() : state.remoteQueue;
         return local;
       }
@@ -284,7 +305,9 @@ function create(api) {
           listVersion: state.listVersion,
           members: state.ticks % 12 === 0
         });
-      }).then(applyRemote).then(function () {
+      }).then(function (snapshot) {
+        return applyRemote(snapshot, !(state.room && state.room.owner));
+      }).then(function () {
         var interval = Math.max(20, Number(state.room.heartbeatSec || 50)) * 1000;
         if (Date.now() - state.lastHeartbeatAt < interval) return true;
         state.lastHeartbeatAt = Date.now();

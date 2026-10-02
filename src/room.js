@@ -7,7 +7,6 @@ var gateway = require("./gateway");
 var BIZ = "1009";
 var DEFAULT_BG = "https://youthimgbssdl.kugou.com/6e9cdcef8d163d06225d8cbeaa2f1ece.JPEG";
 var mixIds = {};
-var progressUnit = "s";
 
 function text(value) { return value == null ? "" : String(value); }
 function validHash(value) {
@@ -121,17 +120,12 @@ function progressMs(raw, durationMs) {
   if (!isFinite(n) || n <= 0) return 0;
   var seconds = durationMs > 1000 && n <= durationMs / 1000 + 2;
   var millis = durationMs > 1000 && !seconds && n <= durationMs + 2000;
-  if (millis || n > 10000) {
-    progressUnit = "ms";
-    return Math.floor(n);
-  }
-  progressUnit = "s";
+  if (millis || n > 10000) return Math.floor(n);
   return Math.floor(n * 1000);
 }
 
 function outboundProgress(positionMs) {
-  var ms = Math.max(0, Math.floor(Number(positionMs || 0)));
-  return progressUnit === "ms" ? ms : Math.floor(ms / 1000);
+  return Math.max(0, Math.floor(Number(positionMs || 0) / 1000));
 }
 
 function snapshotFrom(syncBody, listBody) {
@@ -153,8 +147,8 @@ function snapshotFrom(syncBody, listBody) {
     : (progress.play_progress != null ? progress.play_progress : data.progress);
   var pause = data.pause != null ? data.pause : progress.pause;
   var playing = null;
-  if (Number(pause) === 2) playing = true;
-  if (Number(pause) === 1) playing = false;
+  if (Number(pause) === 1) playing = true;
+  if (Number(pause) === 2) playing = false;
   return {
     songIds: songs.map(function (song) { return song.hash; }).slice(0, 50),
     currentSongId: current,
@@ -278,7 +272,7 @@ function listenTogether(args) {
     case "playing":
       return gateway.post("/youth/v1/genting/music_player_opr", {
         action: 3,
-        pause: args.playing ? "2" : "1"
+        pause: args.playing ? "1" : "2"
       }, { roomid: roomId }).then(function () { return true; }, fail);
     case "heartbeat":
       return withSession(function (session) {
