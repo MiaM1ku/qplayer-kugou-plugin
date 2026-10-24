@@ -16,7 +16,7 @@ QPlayer 的独立音源插件，实现公开的 JavaScript 插件 ABI（apiVersi
 | `playlistDetails` / `albumDetails` | 歌单、专辑曲目。自己的歌单走云列表 |
 | `home` | 手机端热门歌单 |
 | `userPlaylists` | 登录后的云歌单，ID 为 `cloudlist:{listid}` |
-| `resolveStream` | songinfo v2 → playInfo → tracker |
+| `resolveStream` | songinfo v2 → HTTPS playInfo → getdata → tracker |
 | `lyrics` | KRC 解密后的逐字 LRC，含翻译/罗马音（若有） |
 | `login` / `account` | 扫码（含设备注册）或粘贴 Cookie |
 | 一起听 | 播放页入口。加入概念版房间并同步播放；创建房间需要酷狗已实名 |
