@@ -91,6 +91,15 @@ function httpGetJson(url, ua, extra) {
   return httpGet(url, ua, extra).then(function (body) { return JSON.parse(body || "{}"); });
 }
 
+function httpGetJsonTry(urls, ua, extra) {
+  function next(i) {
+    if (i >= urls.length) return Promise.reject(new Error("HTTP failed"));
+    return httpGetJson(urls[i], ua, extra).then(function (body) { return body; },
+        function () { return next(i + 1); });
+  }
+  return next(0);
+}
+
 function md5Hex(data) {
   return call("crypto.digest", { algorithm: "MD5", data: data, dataEncoding: "utf8", outputEncoding: "hex" });
 }
@@ -495,11 +504,17 @@ function pickUrl(value) {
 }
 
 function fetchPlayInfo(hash) {
-  return httpGetJson("http://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash=" + encodeURIComponent(hash), UA_MOBILE)
-    .then(function (body) {
-      if (body.errcode || !body.url) throw new Error("playInfo " + (body.errcode || "empty"));
-      return body;
-    });
+  var query = "/app/i/getSongInfo.php?cmd=playInfo&hash=" + encodeURIComponent(hash);
+  // Java HttpURLConnection 连 http://m.kugou.com 会被对端直接掐断，和歌词接口同一类坑。
+  return httpGetJsonTry([
+    "https://m.kugou.com" + query,
+    "http://m.kugou.com" + query
+  ], UA_MOBILE).then(function (body) {
+    var url = first(body.url, pickUrl(body.backup_url));
+    if (body.errcode || !url) throw new Error("playInfo " + (body.errcode || "empty"));
+    body.url = url;
+    return body;
+  });
 }
 
 function fetchTracker(hash) {
@@ -522,13 +537,16 @@ function fetchTracker(hash) {
 }
 
 function fetchWebGetData(hash) {
-  return httpGetJson("https://wwwapi.kugou.com/yy/index.php?r=play/getdata&hash=" + encodeURIComponent(hash), UA_PC)
-    .then(function (body) {
-      var data = body.data || {};
-      var url = first(data.play_url, data.play_backup_url);
-      if (!url) throw new Error("getdata empty");
-      return { url: url, extName: data.extName, songName: data.song_name, author_name: data.author_name, album_img: data.img, timeLength: data.timelength };
-    });
+  var query = "/yy/index.php?r=play/getdata&hash=" + encodeURIComponent(hash) + "&mid=1&platid=4";
+  return httpGetJsonTry([
+    "https://wwwapi.kugou.com" + query,
+    "http://wwwapi.kugou.com" + query
+  ], UA_PC).then(function (body) {
+    var data = body.data || {};
+    var url = first(data.play_url, data.play_backup_url);
+    if (!url) throw new Error("getdata empty");
+    return { url: url, extName: data.extName, songName: data.song_name, author_name: data.author_name, album_img: data.img, timeLength: data.timelength };
+  });
 }
 
 function fetchSonginfoV2(hash) {
@@ -662,7 +680,10 @@ function downloadLyric(candidate, index) {
 function lyrics(args) {
   var hash = String(args && args.id || "").toLowerCase();
   if (!validHash(hash)) return { assets: [] };
-  return httpGetJson("http://krcs.kugou.com/search?ver=1&client=mobi&duration=0&hash=" + hash + "&album_audio_id=", UA_MOBILE)
+  return httpGetJsonTry([
+    "https://krcs.kugou.com/search?ver=1&client=mobi&duration=0&hash=" + hash + "&album_audio_id=",
+    "http://krcs.kugou.com/search?ver=1&client=mobi&duration=0&hash=" + hash + "&album_audio_id="
+  ], UA_MOBILE)
     .then(function (body) {
       var candidate = (body.candidates || [])[0];
       if (!candidate || !candidate.id || !candidate.accesskey) return { assets: [] };
